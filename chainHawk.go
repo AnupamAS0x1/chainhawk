@@ -34,18 +34,63 @@ func main() {
 	for _, repo := range repos {
 		fmt.Printf("\nChecking repository: %s/%s\n", org, repo.Name)
 
-		packageJSON, err := fetchPackageJSON(org, repo.Name)
-		if err != nil {
-			fmt.Printf("Error fetching package.json: %v\n", err)
-			continue
-		}
+		checkNPMRepo(org, repo.Name)
+		checkRubyGemsRepo(org, repo.Name)
+		checkPythonPipRepo(org, repo.Name)
+	}
+}
 
-		if packageJSON == nil {
-			fmt.Println("package.json not found")
-		} else {
-			fmt.Println("package.json found")
-			checkDependencies(packageJSON)
-		}
+// Add checkNPMRepo function
+func checkNPMRepo(org, repoName string) {
+	fmt.Println("Checking for package.json...")
+
+	packageJSON, err := fetchPackageJSON(org, repoName)
+	if err != nil {
+		fmt.Printf("Error fetching package.json: %v\n", err)
+		return
+	}
+
+	if packageJSON == nil {
+		fmt.Println("package.json not found")
+	} else {
+		fmt.Println("package.json found")
+		checkDependencies(packageJSON)
+	}
+}
+
+// Add checkRubyGemsRepo function
+func checkRubyGemsRepo(org, repoName string) {
+	fmt.Println("Checking for Gemfile...")
+
+	gemfile, err := fetchFileContent(org, repoName, "Gemfile")
+	if err != nil {
+		fmt.Printf("Error fetching Gemfile: %v\n", err)
+		return
+	}
+
+	if gemfile == "" {
+		fmt.Println("Gemfile not found")
+	} else {
+		fmt.Println("Gemfile found")
+		checkRubyGemsDependencies(gemfile)
+	}
+}
+
+// Add checkPythonPipRepo function
+func checkPythonPipRepo(org, repoName string) {
+	fmt.Println("Checking for requirements.txt...")
+
+	requirements, err := fetchFileContent(org, repoName, "requirements.txt")
+	if err != nil {
+		fmt.Printf("Error fetching requirements.txt: %v\n", err)
+		return
+	}
+
+	if requirements == "" {
+		fmt.Println("requirements.txt not found")
+	} else {
+		fmt.Println("requirements.txt found")
+		checkPythonPipDependencies(requirements)
 	}
 }
 
@@ -105,7 +150,7 @@ func fetchPackageJSON(org, repoName string) (*PackageJSON, error) {
 
 func checkDependencies(packageJSON *PackageJSON) {
 	for packageName := range packageJSON.Dependencies {
-		available, err := isPackageAvailable(packageName)
+		available, err := isNpmPackageAvailable(packageName)
 		if err != nil {
 			fmt.Printf("Error checking package '%s': %v\n", packageName, err)
 			continue
@@ -119,7 +164,74 @@ func checkDependencies(packageJSON *PackageJSON) {
 	}
 }
 
-func isPackageAvailable(packageName string) (bool, error) {
+func checkRubyGemsDependencies(gemfile string) {
+	gems := parseGemfile(gemfile)
+	for _, gem := range gems {
+		available, err := isRubyGemAvailable(gem)
+		if err != nil {
+			fmt.Printf("Error checking gem '%s': %v\n", gem, err)
+			continue
+		}
+
+		if available {
+			fmt.Printf("Gem '%s' is available\n", gem)
+		} else {
+			fmt.Printf("Gem '%s' is not available\n", gem)
+		}
+	}
+}
+
+func checkPythonPipDependencies(requirements string) {
+	packages := parseRequirements(requirements)
+	for _, packageName := range packages {
+		available, err := isPypiPackageAvailable(packageName)
+		if err != nil {
+			fmt.Printf("Error checking package '%s': %v\n", packageName, err)
+			continue
+		}
+
+		if available {
+			fmt.Printf("Package '%s' is available\n", packageName)
+		} else {
+			fmt.Printf("Package '%s' is not available\n", packageName)
+		}
+	}
+}
+
+func parseGemfile(gemfile string) []string {
+	lines := strings.Split(gemfile, "\n")
+	gems := make([]string, 0)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "gem ") {
+			parts := strings.Split(line, " ")
+			if len(parts) >= 2 {
+				gemName := strings.Trim(parts[1], `'""`)
+				gems = append(gems, gemName)
+			}
+		}
+	}
+
+	return gems
+}
+
+func parseRequirements(requirements string) []string {
+	lines := strings.Split(requirements, "\n")
+	packages := make([]string, 0)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			parts := strings.Split(line, "==")
+			packages = append(packages, parts[0])
+		}
+	}
+
+	return packages
+}
+
+func isNpmPackageAvailable(packageName string) (bool, error) {
 	url := fmt.Sprintf("https://registry.npmjs.org/%s", packageName)
 
 	resp, err := http.Get(url)
@@ -129,4 +241,49 @@ func isPackageAvailable(packageName string) (bool, error) {
 	defer resp.Body.Close()
 
 	return resp.StatusCode == http.StatusOK, nil
+}
+
+func isRubyGemAvailable(gemName string) (bool, error) {
+	url := fmt.Sprintf("https://rubygems.org/api/v1/gems/%s.json", gemName)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+func isPypiPackageAvailable(packageName string) (bool, error) {
+	url := fmt.Sprintf("https://pypi.org/pypi/%s/json", packageName)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+func fetchFileContent(org, repoName, fileName string) (string, error) {
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s", org, repoName, fileName)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
 }
