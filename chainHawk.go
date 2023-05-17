@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -25,11 +26,16 @@ func main() {
 	org, _ := reader.ReadString('\n')
 	org = strings.TrimSpace(org)
 
-	repos, err := fetchRepos(org)
+	// Replace "your_token_here" with your actual token
+	token := ""
+
+	repos, err := fetchRepos(org, token)
 	if err != nil {
 		fmt.Printf("Error fetching repositories: %v\n", err)
 		os.Exit(1)
 	}
+
+	//... rest of the main function
 
 	for _, repo := range repos {
 		fmt.Printf("\nChecking repository: %s/%s\n", org, repo.Name)
@@ -37,6 +43,9 @@ func main() {
 		checkNPMRepo(org, repo.Name)
 		checkRubyGemsRepo(org, repo.Name)
 		checkPythonPipRepo(org, repo.Name)
+
+		// fmt.Println("Checking for leaked API keys:")
+		// checkForLeakedAPIKeys(org, repo.Name)
 	}
 }
 
@@ -94,10 +103,18 @@ func checkPythonPipRepo(org, repoName string) {
 	}
 }
 
-func fetchRepos(org string) ([]Repo, error) {
+func fetchRepos(org string, token string) ([]Repo, error) {
 	url := fmt.Sprintf("https://api.github.com/orgs/%s/repos", org)
 
-	resp, err := http.Get(url)
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -287,3 +304,88 @@ func fetchFileContent(org, repoName, fileName string) (string, error) {
 
 	return string(body), nil
 }
+
+// func checkForLeakedAPIKeys(org, token string) {
+// 	patterns := []string{
+// 		"(?i)\\/\\*\\s*TODO",
+// 		"(?i)//\\s*TODO",
+// 		"(?i)#\\s*TODO",
+// 	}
+
+// 	for _, pattern := range patterns {
+// 		query := fmt.Sprintf("%s org:%s", pattern, org)
+// 		resp, err := searchGitHub(query, token)
+
+// 		if err != nil {
+// 			fmt.Printf("Error fetching search results for pattern '%s': %v\n", pattern, err)
+// 			continue
+// 		}
+
+// 		if resp.StatusCode != http.StatusOK {
+// 			fmt.Printf("Error fetching search results for pattern '%s': status code: %d\n", pattern, resp.StatusCode)
+// 			continue
+// 		}
+
+// 		// Process the search results
+// 		// ...
+// 	}
+// }
+
+func searchLeakedAPIKeys(org, repoName, pattern string) ([]string, error) {
+	url := fmt.Sprintf("https://api.github.com/search/code?q=%s+in:file+repo:%s/%s", url.QueryEscape(pattern), org, repoName)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Error fetching search results, status code: %d", resp.StatusCode)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var searchResult struct {
+		Items []struct {
+			Path string `json:"path"`
+		} `json:"items"`
+	}
+
+	err = json.Unmarshal(body, &searchResult)
+	if err != nil {
+		return nil, err
+	}
+
+	leakedKeys := make([]string, 0, len(searchResult.Items))
+	for _, item := range searchResult.Items {
+		leakedKeys = append(leakedKeys, item.Path)
+	}
+
+	return leakedKeys, nil
+}
+
+// func searchGitHub(query, token string) (*http.Response, error) {
+// 	url := fmt.Sprintf("https://api.github.com/search/code?q=%s", url.QueryEscape(query))
+
+// 	client := &http.Client{}
+// 	req, err := http.NewRequest("GET", url, nil)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	req.Header.Set("Accept", "application/vnd.github+json")
+// 	req.Header.Set("Authorization", "Bearer "+token)
+// 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+// 	resp, err := client.Do(req)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	return resp, nil
+
+//}
