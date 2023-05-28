@@ -19,7 +19,7 @@ ChainHawk is a tool written in Go that helps analyze repositories within a GitHu
     `go build` 
 
 4. Run the executable file with the desired options. For example, to analyze repositories within a GitHub organization, use the following command:
-    `./chainhawl`
+    `./chainhawk`
 
 
 5. Follow the instructions provided by the tool to input the GitHub organization name and the required authentication token.
