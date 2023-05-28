@@ -15,14 +15,19 @@ ChainHawk is a tool written in Go that helps analyze repositories within a GitHu
 
 1. Make sure you have Go installed on your system.
 2. Clone this repository and navigate to the project directory.
-3. Open the terminal and build the project using the following command:
+3. Replace the github token by using any text editor
+    
+    `vi chainHawk.go`
+    `token := "your_token"`
+   
+4. Open the terminal and build the project using the following command:
     `go build` 
 
-4. Run the executable file with the desired options. For example, to analyze repositories within a GitHub organization, use the following command:
+5. Run the executable file with the desired options. For example, to analyze repositories within a GitHub organization, use the following command:
     `./chainhawl`
 
 
-5. Follow the instructions provided by the tool to input the GitHub organization name and the required authentication token.
+6. Follow the instructions provided by the tool to input the GitHub organization name and the required authentication token.
 
 ## Dependencies
 
