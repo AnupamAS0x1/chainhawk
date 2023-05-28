@@ -18,7 +18,8 @@ ChainHawk is a tool written in Go that helps analyze repositories within a GitHu
 3. Replace the github token by using any text editor
     
     `vi chainHawk.go`
-    `token := "your_token"`
+    
+    ```token := "your_token"```
    
 4. Open the terminal and build the project using the following command:
     `go build` 
