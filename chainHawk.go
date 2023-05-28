@@ -46,14 +46,16 @@ func main() {
 	org, _ := reader.ReadString('\n')
 	org = strings.TrimSpace(org)
 
-	// Replace "your_token_here" with your actual token
-	token := "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"
+	fmt.Print("Enter your GitHub token: ")
+	token, _ := reader.ReadString('\n')
+	token = strings.TrimSpace(token)
 
 	repos, err := fetchRepos(org, token)
 	if err != nil {
 		fmt.Printf("Error fetching repositories: %v\n", err)
 		os.Exit(1)
 	}
+
 	var reports []RepoReport
 
 	for _, repo := range repos {
