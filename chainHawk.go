@@ -2,31 +2,41 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
+
+	"github.com/google/go-github/github"
+	"golang.org/x/oauth2"
 )
 
 type PackageJSON struct {
-	Dependencies map[string]string `json:"dependencies"` //
+	Dependencies map[string]string `json:"dependencies"`
+}
+
+type PackageStatus struct {
+	PackageName string
+	Version     string
+	Available   bool
 }
 
 type Repo struct {
 	Name string `json:"name"`
 }
+
 type RepoReport struct {
 	RepoName           string
 	PackageJSONExists  bool
-	NpmPackages        map[string]bool
+	NpmPackages        []PackageStatus
 	GemfileExists      bool
-	RubyGems           map[string]bool
+	RubyGems           []PackageStatus
 	RequirementsExists bool
-	PythonPackages     map[string]bool
-	// LeakedAPIKeys      []string
+	PythonPackages     []PackageStatus
+	LeakedAPIKeys      []string
 }
 
 func main() {
@@ -37,7 +47,7 @@ func main() {
 	org = strings.TrimSpace(org)
 
 	// Replace "your_token_here" with your actual token
-	token := "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"
+	token := "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"
 
 	repos, err := fetchRepos(org, token)
 	if err != nil {
@@ -50,17 +60,13 @@ func main() {
 		fmt.Printf("\nChecking repository: %s/%s\n", org, repo.Name)
 
 		report := RepoReport{
-			RepoName:       repo.Name,
-			NpmPackages:    make(map[string]bool),
-			RubyGems:       make(map[string]bool),
-			PythonPackages: make(map[string]bool),
+			RepoName: repo.Name,
 		}
 
 		report.PackageJSONExists = checkNPMRepo(org, repo.Name, &report)
 		report.GemfileExists = checkRubyGemsRepo(org, repo.Name, &report)
 		report.RequirementsExists = checkPythonPipRepo(org, repo.Name, &report)
-
-		// report.LeakedAPIKeys = checkForLeakedAPIKeys(org, repo.Name)
+		report.LeakedAPIKeys, _ = searchGithub(org, token)
 
 		reports = append(reports, report)
 	}
@@ -68,7 +74,38 @@ func main() {
 	generateReport(reports)
 }
 
-// Add checkNPMRepo function
+func searchGithub(org, token string) ([]string, error) {
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+
+	client := github.NewClient(tc)
+
+	opts := &github.SearchOptions{Sort: "indexed"}
+	fmt.Println("Searching for leaks...")
+	queries := []string{
+		"api in:file org:" + org,
+		"secrets in:file org:" + org,
+		"aws_key in:file org:" + org,
+	}
+
+	var leakedKeys []string
+	for _, query := range queries {
+		results, _, err := client.Search.Code(ctx, query, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, result := range results.CodeResults {
+			leakedKeys = append(leakedKeys, result.GetHTMLURL())
+		}
+	}
+
+	return leakedKeys, nil
+}
+
 func checkNPMRepo(org, repoName string, report *RepoReport) bool {
 	fmt.Println("Checking for package.json...")
 
@@ -83,7 +120,8 @@ func checkNPMRepo(org, repoName string, report *RepoReport) bool {
 		return false
 	} else {
 		fmt.Println("package.json found")
-		checkDependencies(packageJSON, report.NpmPackages)
+		report.PackageJSONExists = true
+		checkDependencies(packageJSON, &report.NpmPackages)
 		return true
 	}
 }
@@ -102,7 +140,8 @@ func checkRubyGemsRepo(org, repoName string, report *RepoReport) bool {
 		return false
 	} else {
 		fmt.Println("Gemfile found")
-		checkRubyGemsDependencies(gemfile, report.RubyGems)
+		report.GemfileExists = true
+		checkRubyGemsDependencies(gemfile, &report.RubyGems)
 		return true
 	}
 }
@@ -121,10 +160,12 @@ func checkPythonPipRepo(org, repoName string, report *RepoReport) bool {
 		return false
 	} else {
 		fmt.Println("requirements.txt found")
-		checkPythonPipDependencies(requirements, report.PythonPackages)
+		report.RequirementsExists = true
+		checkPythonPipDependencies(requirements, &report.PythonPackages)
 		return true
 	}
 }
+
 func fetchRepos(org string, token string) ([]Repo, error) {
 	url := fmt.Sprintf("https://api.github.com/orgs/%s/repos", org)
 
@@ -187,18 +228,22 @@ func fetchPackageJSON(org, repoName string) (*PackageJSON, error) {
 	return &packageJSON, nil
 }
 
-func checkDependencies(packageJSON *PackageJSON, packages map[string]bool) {
-	for packageName := range packageJSON.Dependencies {
+func checkDependencies(packageJSON *PackageJSON, packages *[]PackageStatus) {
+	for packageName, version := range packageJSON.Dependencies {
 		available, err := isNpmPackageAvailable(packageName)
 		if err != nil {
 			fmt.Printf("Error checking package '%s': %v\n", packageName, err)
 			continue
 		}
-		packages[packageName] = available
+		*packages = append(*packages, PackageStatus{
+			PackageName: packageName,
+			Version:     version,
+			Available:   available,
+		})
 	}
 }
 
-func checkRubyGemsDependencies(gemfile string, gems map[string]bool) {
+func checkRubyGemsDependencies(gemfile string, gems *[]PackageStatus) {
 	gemNames := parseGemfile(gemfile)
 	for _, gem := range gemNames {
 		available, err := isRubyGemAvailable(gem)
@@ -206,11 +251,14 @@ func checkRubyGemsDependencies(gemfile string, gems map[string]bool) {
 			fmt.Printf("Error checking gem '%s': %v\n", gem, err)
 			continue
 		}
-		gems[gem] = available
+		*gems = append(*gems, PackageStatus{
+			PackageName: gem,
+			Available:   available,
+		})
 	}
 }
 
-func checkPythonPipDependencies(requirements string, packages map[string]bool) {
+func checkPythonPipDependencies(requirements string, packages *[]PackageStatus) {
 	packageNames := parseRequirements(requirements)
 	for _, packageName := range packageNames {
 		available, err := isPypiPackageAvailable(packageName)
@@ -218,7 +266,10 @@ func checkPythonPipDependencies(requirements string, packages map[string]bool) {
 			fmt.Printf("Error checking package '%s': %v\n", packageName, err)
 			continue
 		}
-		packages[packageName] = available
+		*packages = append(*packages, PackageStatus{
+			PackageName: packageName,
+			Available:   available,
+		})
 	}
 }
 
@@ -312,91 +363,6 @@ func fetchFileContent(org, repoName, fileName string) (string, error) {
 	return string(body), nil
 }
 
-// func checkForLeakedAPIKeys(org, token string) {
-// 	patterns := []string{
-// 		"(?i)\\/\\*\\s*TODO",
-// 		"(?i)//\\s*TODO",
-// 		"(?i)#\\s*TODO",
-// 	}
-
-// 	for _, pattern := range patterns {
-// 		query := fmt.Sprintf("%s org:%s", pattern, org)
-// 		resp, err := searchGitHub(query, token)
-
-// 		if err != nil {
-// 			fmt.Printf("Error fetching search results for pattern '%s': %v\n", pattern, err)
-// 			continue
-// 		}
-
-// 		if resp.StatusCode != http.StatusOK {
-// 			fmt.Printf("Error fetching search results for pattern '%s': status code: %d\n", pattern, resp.StatusCode)
-// 			continue
-// 		}
-
-// 		// Process the search results
-// 		// ...
-// 	}
-// }
-
-func searchLeakedAPIKeys(org, repoName, pattern string) ([]string, error) {
-	url := fmt.Sprintf("https://api.github.com/search/code?q=%s+in:file+repo:%s/%s", url.QueryEscape(pattern), org, repoName)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Error fetching search results, status code: %d", resp.StatusCode)
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var searchResult struct {
-		Items []struct {
-			Path string `json:"path"`
-		} `json:"items"`
-	}
-
-	err = json.Unmarshal(body, &searchResult)
-	if err != nil {
-		return nil, err
-	}
-
-	leakedKeys := make([]string, 0, len(searchResult.Items))
-	for _, item := range searchResult.Items {
-		leakedKeys = append(leakedKeys, item.Path)
-	}
-
-	return leakedKeys, nil
-}
-
-// func searchGitHub(query, token string) (*http.Response, error) {
-// 	url := fmt.Sprintf("https://api.github.com/search/code?q=%s", url.QueryEscape(query))
-
-// 	client := &http.Client{}
-// 	req, err := http.NewRequest("GET", url, nil)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	req.Header.Set("Accept", "application/vnd.github+json")
-// 	req.Header.Set("Authorization", "Bearer "+token)
-// 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	return resp, nil
-
-//}
-
 func generateReport(reports []RepoReport) {
 	for _, report := range reports {
 		fmt.Println("=======================================")
@@ -406,46 +372,46 @@ func generateReport(reports []RepoReport) {
 		fmt.Printf("package.json exists: %v\n", report.PackageJSONExists)
 		if report.PackageJSONExists {
 			fmt.Println("NPM packages:")
-			for packageName, available := range report.NpmPackages {
+			for _, pkg := range report.NpmPackages {
 				status := "Not Available"
-				if available {
+				if pkg.Available {
 					status = "Available"
 				}
-				fmt.Printf("- %s: %s\n", packageName, status)
+				fmt.Printf("- %s (Version: %s): %s\n", pkg.PackageName, pkg.Version, status)
 			}
 		}
 
 		fmt.Printf("\nGemfile exists: %v\n", report.GemfileExists)
 		if report.GemfileExists {
 			fmt.Println("Ruby gems:")
-			for gemName, available := range report.RubyGems {
+			for _, pkg := range report.RubyGems {
 				status := "Not Available"
-				if available {
+				if pkg.Available {
 					status = "Available"
 				}
-				fmt.Printf("- %s: %s\n", gemName, status)
+				fmt.Printf("- %s: %s\n", pkg.PackageName, status)
 			}
 		}
 
 		fmt.Printf("\nrequirements.txt exists: %v\n", report.RequirementsExists)
 		if report.RequirementsExists {
 			fmt.Println("Python packages:")
-			for packageName, available := range report.PythonPackages {
+			for _, pkg := range report.PythonPackages {
 				status := "Not Available"
-				if available {
+				if pkg.Available {
 					status = "Available"
 				}
-				fmt.Printf("- %s: %s\n", packageName, status)
+				fmt.Printf("- %s: %s\n", pkg.PackageName, status)
 			}
 		}
 
-		// fmt.Printf("\nLeaked API keys: %v\n", len(report.LeakedAPIKeys) > 0)
-		// if len(report.LeakedAPIKeys) > 0 {
-		// 	fmt.Println("Leaked keys:")
-		// 	for _, key := range report.LeakedAPIKeys {
-		// 		fmt.Printf("- %s\n", key)
-		// 	}
-		// }
+		fmt.Printf("\nLeaked API keys: %v\n", len(report.LeakedAPIKeys) > 0)
+		if len(report.LeakedAPIKeys) > 0 {
+			fmt.Println("Leaked keys:")
+			for _, key := range report.LeakedAPIKeys {
+				fmt.Printf("- %s\n", key)
+			}
+		}
 		fmt.Println("\n")
 	}
 }
