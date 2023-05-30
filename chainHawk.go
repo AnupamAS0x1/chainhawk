@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/common-nighthawk/go-figure"
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 )
@@ -40,6 +41,9 @@ type RepoReport struct {
 }
 
 func main() {
+
+	myFigure := figure.NewColorFigure("ChainHawk", "", "blue", true)
+	myFigure.Print()
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Print("Enter the GitHub organization name: ")
